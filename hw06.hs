@@ -4,7 +4,9 @@
 {-# LANGUAGE TypeFamilies      #-}
 {-# LANGUAGE FlexibleInstances #-}
 
-import Data.Array (Array)
+import           Data.Array      (Array, Ix)
+import qualified Data.Ix as Ix (inRange)
+import qualified Data.Array as A (array, bounds, indices, listArray, (!), (//))
 
 -- | Класс типов 'Indexable' характеризует структуры данных,
 --   к элементам которых можно обращаться по индексу.
@@ -41,6 +43,11 @@ class Indexable c where
   --   то падает с ошибкой.
   --
   getUnsafe :: c a -> Index c -> a
+  getUnsafe cls c = getUnsafeHelper (get cls c)
+    where
+      getUnsafeHelper :: Maybe a -> a
+      getUnsafeHelper (Just a) = a
+      getUnsafeHelper Nothing = error "Out of boundary"
 
   -- | Заменяет в структуре @c a@ значение по индексу @Index c@ на @a@.
   --   Возвращает изменённую структуру.
@@ -57,6 +64,11 @@ class Indexable c where
   --   то падает с ошибкой.
   --
   updateUnsafe :: c a -> Index c -> a -> c a
+  updateUnsafe cls c a = updateUnsafeHelper (update cls c a)
+    where
+      updateUnsafeHelper :: Maybe a -> a
+      updateUnsafeHelper (Just a) = a
+      updateUnsafeHelper Nothing = error "Out of boundary"
 
   -- | Возвращает список всех индексов в структуре @c a@.
   --   Порядок — от первого индекса до последнего.
@@ -72,29 +84,47 @@ class Indexable c where
 -- | Пример того, как задать ассоциированный тип 'Index'
 --   для конкретного типа 'List'.
 --
+
 instance Indexable [] where
     type Index [] = Int
 
-    get          = undefined
-    getUnsafe    = undefined
-    update       = undefined
-    updateUnsafe = undefined
-    indices      = undefined
+    get = getHelper 0
+      where
+        getHelper acc [] _ = Nothing
+        getHelper acc (x:xs) ind = if acc == ind then Just x else getHelper (acc + 1) xs ind
+
+    update [] _ _ = Nothing
+    update x n newVal = Just (updateHelper x n newVal)
+      where
+        updateHelper (x:xs) n newVal
+          | n == 0 = newVal:xs
+          | otherwise = x:updateHelper xs (n - 1) newVal
+
+    indices xs = [0 .. length xs - 1]
 
 -- | Пример того, как задать ассоциированный тип 'Index' 
 --   для конкретного типа 'Array ind'.
 --
-instance Indexable (Array ind) where
-    type Index (Array ind) = ind
 
-    get          = undefined
-    getUnsafe    = undefined
-    update       = undefined
-    updateUnsafe = undefined
-    indices      = undefined
+instance Ix ind => Indexable (Array ind) where
+  type Index (Array ind) = ind
+
+  get arr ind = if Ix.inRange (A.bounds arr) ind then Just (arr A.! ind) else Nothing
+  update arr ind newVal = if Ix.inRange (A.bounds arr) ind then Just (arr A.// [(ind, newVal)]) else Nothing
+  indices = A.indices
 
 -- 3. Определите новый тип 'Seq a', который является обёрткой над 'Array Int a'.
 --    Сделайте его представителем класса типов 'Indexable'. (0.25 б)
+
+data Seq a = Array Int a
+
+--instance Indexable Seq where
+--  get arr ix
+--    | Ix.inRange (A.bounds arr) ix = Just (arr A.! ix)
+--    | otherwise = Nothing
+--
+--  update = undefined
+--  indices = undefined
 
 -- 4. Перепешите функцию @align@ с практики так, чтобы она выравнивала
 --    друг на друга две любые 'Indexable'-структуры данных. (0.25 б)
@@ -125,13 +155,42 @@ instance Indexable (Array ind) where
 --                   координаты заменены на координаты из списка
 --    (0.25 б)
 
+class WithCoords a where
+  getCoords :: a -> [(Float, Float, Float)]
+  setCoords :: a -> [(Float, Float, Float)] -> a
+
 -- 8. Определите тип данных 'Atom'. У него должны быть поля, соотвестствующие его координатам
 --    в пространстве, типу химического элемента и названию атома. 
 --    Сделайте 'Atom' представителем класса типов 'WithCoords'. (0.25 б)
 
+data Atom = Atom {coords :: [(Float, Float, Float)], chemType :: String, name :: String}
+
+instance WithCoords Atom where
+  getCoords a = coords a
+  setCoords a coord = Atom coord (chemType a) (name a)
+
 -- 9. Определите тип данных 'AminoAcid'. У него должны быть поля, соответствующие 
 --    набору атомов, входящих в состав аминокислоты, и однобуквенному названию аминокислоты.
 --    Сделайте 'AminoAcid' представителями классов типов 'WithCoords' и 'Scorable'. (0.5 б)
+
+class Scorable a where
+    score :: a -> a -> Float
+
+data AminoAcid = AminoAcid {atomSet :: [Atom], acidName :: String}
+
+instance WithCoords AminoAcid  where
+    getCoords a = getCoordsHelper (map coords (atomSet a))
+      where
+        getCoordsHelper :: [[a]] -> [a]
+        getCoordsHelper [a] = a
+
+    setCoords a cords = AminoAcid (helper cords (atomSet a)) (acidName a)
+      where
+        helper :: [(Float,Float,Float)] -> [Atom] -> [Atom]
+        helper (cord:cs) (atom:as) = (setCoords atom [cord]):helper cs as
+
+instance Scorable AminoAcid where
+    score a a' = if acidName a == acidName a' then 5 else -4
 
 ------------------------------------------------------------------------------------
 
@@ -146,6 +205,14 @@ instance Indexable (Array ind) where
 -- 11. Реализуйте функцию 'rotate', которая принимает матрицу
 --     вращения и объект типа, являющегося инстансом 'WithCoords', а возвращает
 --     версию исходного объекта, в которой все координаты повёрнуты. (1 б)
+
+type Matrix = ((Float, Float, Float), (Float, Float, Float), (Float, Float, Float))
+
+newCoords :: Matrix -> (Float, Float, Float) -> (Float, Float, Float)
+newCoords ((a00, a01, a02), (a10, a11, a12), (a20, a21, a22)) (x, y, z) = (a00 * x + a01 * y + a02 * z, a10 * x + a11 * y + a12 * z, a20 * x + a21 * y + a22 * z)
+
+rotate :: WithCoords a => Matrix -> a -> a
+rotate matrix a = setCoords a (map (newCoords matrix) (getCoords a))
 
 ------------------------------------------------------------------------------------
 
