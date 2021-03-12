@@ -13,7 +13,7 @@ sumOfSquares = foldr (\thunk elem -> thunk + elem ^ 2) 0
 -- | 1.2. Функция разворачивания списка (0.25 б)
 --
 reverse' :: [a] -> [a]
-reverse' = foldr (\thunk elem -> elem ++ [thunk]) []
+reverse' = foldl' (\xs x -> x:xs) []
 
 -- | 1.3. Функция, которая достаёт из списка элемент по индексу (0.25 б)
 --
