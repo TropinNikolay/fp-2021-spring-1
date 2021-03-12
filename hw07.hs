@@ -1,23 +1,25 @@
 -- В Хаскеле есть тип данных 'Map k v', сопостовляющий каждому ключу 
 -- типа @k@ какое-то конкретное значение типа @v@.
 import Data.Map.Strict (Map)
+import Data.List (foldl')
 
 -- 1. Реализуйте исключительно с помощью свёрток:
 
 -- | 1.1. Функция, суммирующая квадраты элементов списка (0.1 б)
 --
 sumOfSquares :: Num a => [a] -> a
-sumOfSquares = undefined
+sumOfSquares = foldr (\thunk elem -> thunk + elem ^ 2) 0
 
 -- | 1.2. Функция разворачивания списка (0.25 б)
 --
-reverse :: [a] -> [a]
-reverse = undefined
+reverse' :: [a] -> [a]
+reverse' = foldr (\thunk elem -> elem ++ [thunk]) []
 
 -- | 1.3. Функция, которая достаёт из списка элемент по индексу (0.25 б)
 --
-getByIndex :: [a] -> Int -> a
-getByIndex = undefined
+
+--getByIndex :: [a] -> Int -> a
+--getByIndex = foldl' ()
 
 -- | Тип данных "Студент"
 --
@@ -71,15 +73,15 @@ calculateStudentsLog' = undefined
 
 -- | Хорошо знакомый нам тип данных "Дерево"
 --
-data Tree a = Node a [Tree] | Leaf
+data Tree a = Node a [Tree a] | Leaf
   deriving (Eq, Show)
 
 -- 3. Сделайте 'Tree' представителем класса типов 'Foldable' (1 б)
 
 -- | Тип данных "Яблоко"
 --
-data Apple 
-  = Apple 
+data Apple
+  = Apple
       { color  :: String -- цвет яблока
       , weight :: Float  -- вес яблока
       }
@@ -122,9 +124,10 @@ newtype Basket = Basket { apples :: Map String [Apple] }
 --      по дереву яблок корзинку с яблоками.
 --      В 'Data.Map.Strict' вы найдёте функции, которые помогут вам
 --      инициализировать и модифицировать мапу (0.5 б)
---      
-collectBasket :: Apple Tree -> Basket
-collectBasket = undefined
+--
+
+--collectBasket :: Apple Tree -> Basket
+--collectBasket = undefined
 
 -- | Двоичная куча (https://neerc.ifmo.ru/wiki/index.php?title=Двоичная_куча)
 --
@@ -140,7 +143,7 @@ data BinaryHeap a
 -- | 6.1. Реализуйте функцию siftDown, восстанавливающую свойство кучи в куче (0.5 б)
 --      
 siftDown :: Ord a => BinaryHeap a -> BinaryHeap a
-buildHeap = undefined
+siftDown = undefined
 
 -- | 6.2. Реализуйте с помощью свёртки (которая уже написана в коде) 
 --        функцию buildHeap, которая за __линейное время__ конструирует 
