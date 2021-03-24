@@ -1,5 +1,6 @@
 import Data.Char           (digitToInt, isAlphaNum, isSpace, isDigit)
 import Control.Applicative (Alternative (..))
+import Data.Map.Strict     (Map)
 
 newtype Parser a = Parser { runParser :: String -> Maybe (a, String) }
 
@@ -92,13 +93,13 @@ takeWhileP = undefined
 -- | 1.5. Парсер, который падает с ошибкой, если в потоке что-то осталось.
 --        В противном случае парсер отрабатывает успешно (0.5 б)
 --
-eofP :: Parser String ()
+eofP :: Parser ()
 eofP = undefined
 
 -- | 1.6. Парсер, который парсит символ @lBorder@, всё, что парсит переданный парсер @p@,
 --        а потом — правый символ @rBorder@. Возвращает то, что напарсил парсер @p@ (0.25 б)
 --
-inBetweenP :: String -> String -> Parser a -> Parser String a
+inBetweenP :: String -> String -> Parser a -> Parser a
 inBetweenP lBorder rBorder p = undefined 
 
 -- | 2. Реализуйте функцию, которая парсит списки вида "[1, a   , bbb , 23     , -7]".
