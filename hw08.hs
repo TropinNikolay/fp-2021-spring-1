@@ -1,6 +1,9 @@
-import Data.Char           (digitToInt, isAlphaNum, isSpace, isDigit)
 import Control.Applicative (Alternative (..))
-import Data.Map.Strict     (Map)
+import Control.Monad
+import Data.Char (digitToInt, isAlphaNum, isDigit, isPrint, isSpace)
+import Data.Map.Strict (Map, fromList)
+import Data.Maybe (catMaybes)
+import Text.Read (readMaybe)
 
 newtype Parser a = Parser { runParser :: String -> Maybe (a, String) }
 
@@ -30,6 +33,13 @@ instance Alternative Parser where
       f s = case runParser pA s of
         Nothing -> runParser pA' s
         x       -> x
+  many pa = (:) <$> pa <*> (many pa <|> pure [])
+
+instance Monad Parser where
+  m >>= f = Parser $ \str -> case runParser m str of
+                                  Nothing -> Nothing
+                                  Just (g, s') -> runParser (f g) s'
+
 
 satisfyP :: (Char -> Bool) -> Parser Char
 satisfyP p = Parser f
@@ -60,6 +70,17 @@ charP = some symbolP
 newLineP :: Parser Char
 newLineP = satisfyP (== '\n')
 
+charAnyP :: Parser String
+charAnyP = some (satisfyP (\x -> isPrint x && not (isSpace x)))
+
+valueP' :: Parser Value
+valueP' = (FloatValue <$> floatP) <|> ( do
+                                          v <- integer
+                                          case readMaybe v of
+                                               Just v -> return $ IntValue v
+                                               Nothing -> StringValue <$> charAnyP
+                                      ) <|> (StringValue <$> charAnyP)
+
 -- | Чтобы загрузить текст из файла "test.txt" в переменную, 
 --   нужно написать в интерпретаторе следующее:
 --     test <- testIO
@@ -71,42 +92,69 @@ testIO = readFile "test.txt"
 
 -- | 1.1. Парсит только заданную строку (0.25 б)
 --
+charP' :: Char -> Parser Char
+charP' c = satisfyP (== c)
+
 stringP :: String -> Parser String
-stringP = undefined
+stringP []     = pure []
+stringP (c:cs) = (:) <$> charP' c <*> stringP cs
 
 -- | 1.2. Парсит целое число (0.25 б)
 --
+number :: Parser String
+number = many (satisfyP isDigit)
+
+plus :: Parser String
+plus = charP' '+' *> number
+
+minus :: Parser String
+minus = (:) <$> charP' '-' <*> number
+
+integer :: Parser String
+integer = plus <|> minus <|> number
+
 intP :: Parser Int
-intP = undefined
+intP = read <$> integer
 
 -- | 1.3. Парсит вещественное число (0.5 б)
 --
+decimal :: Parser String
+decimal = (:) <$> charP' '.' <*> number
+
 floatP :: Parser Float
-floatP = undefined
+floatP = read <$> ((++) <$> integer <*> decimal)
 
 -- | 1.4. Парсит весь поток, пока символы потока удовлетворяют 
 --        заданному условию (0.5 б)
 --
 takeWhileP :: (Char -> Bool) -> Parser String
-takeWhileP = undefined
+takeWhileP p = Parser (\str -> Just (takeWhile p str, dropWhile p str))
 
 -- | 1.5. Парсер, который падает с ошибкой, если в потоке что-то осталось.
 --        В противном случае парсер отрабатывает успешно (0.5 б)
 --
 eofP :: Parser ()
-eofP = undefined
+eofP = Parser (\str -> if str /= "" then fail "Unexpected end." else return ((), ""))
 
 -- | 1.6. Парсер, который парсит символ @lBorder@, всё, что парсит переданный парсер @p@,
 --        а потом — правый символ @rBorder@. Возвращает то, что напарсил парсер @p@ (0.25 б)
 --
 inBetweenP :: String -> String -> Parser a -> Parser a
-inBetweenP lBorder rBorder p = undefined 
+inBetweenP lBorder rBorder p = do lb <- stringP lBorder
+                                  val <- p
+                                  rb <- stringP rBorder
+                                  return val
 
 -- | 2. Реализуйте функцию, которая парсит списки вида "[1, a   , bbb , 23     , -7]".
 --      Функция принимает парсер, которым парсятся элементы списка (0.5 б)
 --
+sepBy :: Parser String -> Parser a -> Parser [a]
+sepBy str p = do x <- p
+                 xs <- many (str >> p)
+                 return (x : xs)
+
 listP :: Parser a -> Parser [a]
-listP = undefined
+listP p = inBetweenP "[" "]" (sepBy (stringP ", ") p <|> pure [])
 
 -- | Тип, представляющий значение, которое может храниться в списке.
 --
@@ -124,10 +172,16 @@ data Value
 --        в) Всё остальное превращается в StringValue.
 --
 valueP :: Parser Value
-valueP = undefined
+valueP = (FloatValue <$> floatP) <|> ( do
+                                          v <- integer
+                                          case readMaybe v of
+                                               Just v -> return $ IntValue v
+                                               Nothing -> StringValue <$> charAnyP
+                                      ) <|> (StringValue <$> charP)
+
 
 valueListP :: Parser [Value]
-valueListP = undefined
+valueListP = listP valueP
 
 -- 4. Самый популярный формат для хранения табличных данных — csv (https://en.wikipedia.org/wiki/Comma-separated_values).
 --    Реализуйте все вспомогательные функции-парсеры и итоговый парсер csv.
@@ -138,31 +192,43 @@ data CSV
   = CSV 
       {  colNames :: [String] -- названия колонок в файле
       ,  rows     :: [Row]    -- список строк со значениями из файла
-      }
+      } deriving (Show)
 
 -- | Строка CSV представляет из себя отображение названий колонок
 --   в их значения в данной строке. Если у колонки нет значения
 --   в данной строке, то оно помечается как Nothing.
 --
-newtype Row = Row (Map String (Maybe Value))
+newtype Row = Row (Map String (Maybe Value)) deriving (Show)
 
 -- | 4.1 Реализуйте парсер, который парсит строку из значений, 
 --       которые могут парситься заданным парсером @p@ и разделённых заданным разделителем @sep@. 
 --       Если какое-то значение не распарсилось, то оно помечается Nothing (0.5 б)
 --
-abstractRowP :: String -> Parser a -> Parser [Maybe a]
-abstractRowP sep p = undefined
+maybeAlt :: Parser a -> Char -> Parser (Maybe a)
+maybeAlt p split = Parser f
+  where
+    f str = case runParser p str of
+                 Just (v, s) -> Just (Just v, s)
+                 Nothing -> Just (Nothing, drop str)
+    drop st = let (x, xs) = break (split ==) st in if x == st then "" else xs
+
+abstractRowP :: Char -> Parser a -> Parser [Maybe a]
+abstractRowP sep p = do x <- maybeAlt p sep
+                        xs <- many (charP' sep >> maybeAlt p sep) <|> pure []
+                        return (x : xs)
 
 -- | 4.2 Реализуйте парсер, который парсит 'Row'. 
 --       Названия колонок файла передаются аргументом (0.1 б)
 --
 rowP :: [String] -> Parser Row
-rowP colNames = undefined
+rowP colNames = Row . fromList . zip colNames <$> abstractRowP ' ' valueP'
 
 -- | 4.3 Реализуйте итоговый парсер CSV (1 б)
 --
 csvP :: Parser CSV
-csvP = undefined
+csvP = do columns <- sepBy spaceP charP
+          rows <- sepBy (stringP "\n") $ rowP columns
+          return $ CSV columns rows
 
 -- 5. PDB — главный формат для хранения информации о трёхмерных структурах молекул.
 --
@@ -180,14 +246,31 @@ csvP = undefined
 --      2. atoms_and_bonds.pdb, то вы получите 1 бонусный балл. (задание необязательное)
 --         Придётся научиться парсить секцию CONNECT.
 --
+eachP :: Parser [Value]
+eachP = catMaybes <$> abstractRowP ' ' valueP'
+
+pdbP :: Parser PDBModel
+pdbP = do model <- stringP "MODEL"
+          some spaceP
+          x <- intP
+          allLines <- sepBy (stringP "\r\n" <|> stringP "\n" <|> stringP "\r") eachP
+          let (at, bo) = foldl (\(at, b) x -> if isAtom x then (at ++ [x], b) else if isBond x then (at, b ++ [x]) else (at, b)) ([], []) allLines
+          return $ PDBModel (PDBAtom <$> at) (PDBBond <$> bo)
+          where
+            isAtom ((StringValue "ATOM") : xs) = True
+            isAtom _ = False
+            isBond ((StringValue "CONECT") : xs) = True
+            isBond _ = False
 
 -- | Тип, представляющий из себя ATOM
 --
-data PDBAtom = YourImplementationOfPDBAtom
+data PDBAtom = PDBAtom [Value]
+  deriving (Show)
 
 -- | Тип, представляющий из себя CONNECT
 --
-data PDBBond = YourImplementationOfPDBBond
+data PDBBond = PDBBond [Value]
+  deriving (Show)
 
 -- | Тип, представляющий из себя MODEL
 --
@@ -195,7 +278,7 @@ data PDBModel
   = PDBModel 
       { atoms :: [PDBAtom] -- атомы из секции ATOM
       , bonds :: [PDBBond] -- связи из секции CONNECT
-      }
+      } deriving (Show)
 
 -- | PDB-файл
 --
