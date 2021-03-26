@@ -1,5 +1,4 @@
 import Control.Applicative (Alternative (..))
-import Control.Monad
 import Data.Char (digitToInt, isAlphaNum, isDigit, isPrint, isSpace)
 import Data.Map.Strict (Map, fromList)
 import Data.Maybe (catMaybes)
@@ -158,11 +157,7 @@ listP p = inBetweenP "[" "]" (sepBy (stringP ", ") p <|> pure [])
 
 -- | Тип, представляющий значение, которое может храниться в списке.
 --
-data Value 
-  = IntValue Int
-  | FloatValue Float
-  | StringValue String
-  deriving (Eq, Show)
+data Value = IntValue Int | FloatValue Float | StringValue String deriving (Eq, Show)
 
 -- | 3. Реализуйте парсер 'Value', а потом парсер списка 'Value' (0.5 б)
 --
@@ -264,13 +259,11 @@ pdbP = do model <- stringP "MODEL"
 
 -- | Тип, представляющий из себя ATOM
 --
-data PDBAtom = PDBAtom [Value]
-  deriving (Show)
+data PDBAtom = PDBAtom [Value] deriving (Show)
 
 -- | Тип, представляющий из себя CONNECT
 --
-data PDBBond = PDBBond [Value]
-  deriving (Show)
+data PDBBond = PDBBond [Value] deriving (Show)
 
 -- | Тип, представляющий из себя MODEL
 --
