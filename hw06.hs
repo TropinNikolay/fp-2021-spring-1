@@ -1,18 +1,20 @@
 -- С помощью таких конструкций можно включать разные расширения языка.
 -- Поподробнее с тем, что это такое, мы познакомимся чуть позже.
 -- Но, как вы могли догадаться, для выполнения домашки нам понадобились какие-то расширения!
-{-# LANGUAGE TypeFamilies      #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 
-import           Data.Array      (Array, Ix)
+import Data.Array (Array, Ix)
+import qualified Data.Array as A ((!), (//), array, bounds, indices, listArray)
 import qualified Data.Ix as Ix (inRange)
-import qualified Data.Array as A (array, bounds, indices, listArray, (!), (//))
 
 -- | Класс типов 'Indexable' характеризует структуры данных,
 --   к элементам которых можно обращаться по индексу.
--- 
+--
 --   Важно, что характеризует он именно какую-то __структуру__ данных @c@.
---   @c@ может быть 'List', 'Matrix' или 'Array ind' (у 'Array' два типовых 
+--   @c@ может быть 'List', 'Matrix' или 'Array ind' (у 'Array' два типовых
 --   параметра — тип индекса, т.е. @ind@, и тип значений в массиве).
 --
 class Indexable c where
@@ -33,8 +35,8 @@ class Indexable c where
   --   Если индекс находится за границами структуры, то возвращает Nothing.
   --
   --   Смотрите, как круто! Запись 'Index c' подразумевает, что вторым аргументом
-  --   в @get@ был передан тип, соответствующий индексу @c@. 
-  --   То есть при задании класса типов у нас есть возможность абстрагироваться от того, 
+  --   в @get@ был передан тип, соответствующий индексу @c@.
+  --   То есть при задании класса типов у нас есть возможность абстрагироваться от того,
   --   что это за конкретный индекс: 'Int', (Int, Int) или что-то другое...
   --
   get :: c a -> Index c -> Maybe a
@@ -54,8 +56,8 @@ class Indexable c where
   --   Если индекс находится за границами структуры, то возвращает Nothing.
   --
   --   ВАЖНО: функции, которые каким-либо образом меняют объекты в Хаскеле,
-  --          возвращают __новые__ версии этих объектов, содержащие изменения. 
-  --          При этом те объекты, которые мы меняли изначально, никак не 
+  --          возвращают __новые__ версии этих объектов, содержащие изменения.
+  --          При этом те объекты, которые мы меняли изначально, никак не
   --          поменяются, потому что у нас в языке всё неизменяемое.
   --
   update :: c a -> Index c -> a -> Maybe (c a)
@@ -102,7 +104,7 @@ instance Indexable [] where
 
     indices xs = [0 .. length xs - 1]
 
--- | Пример того, как задать ассоциированный тип 'Index' 
+-- | Пример того, как задать ассоциированный тип 'Index'
 --   для конкретного типа 'Array ind'.
 --
 
@@ -116,18 +118,56 @@ instance Ix ind => Indexable (Array ind) where
 -- 3. Определите новый тип 'Seq a', который является обёрткой над 'Array Int a'.
 --    Сделайте его представителем класса типов 'Indexable'. (0.25 б)
 
-data Seq a = Array Int a
+newtype Seq a = Seq (Array Int a) deriving (Show)
 
---instance Indexable Seq where
---  get arr ix
---    | Ix.inRange (A.bounds arr) ix = Just (arr A.! ix)
---    | otherwise = Nothing
---
---  update = undefined
---  indices = undefined
+instance Indexable Seq where
+  type Index Seq = Int
+
+  get (Seq arr) ind = if Ix.inRange (A.bounds arr) ind then Just (arr A.! ind) else Nothing
+  update (Seq arr) ind newVal = if Ix.inRange (A.bounds arr) ind then Just (Seq $ arr A.// [(ind, newVal)]) else Nothing
+  indices (Seq arr) = A.indices arr
 
 -- 4. Перепешите функцию @align@ с практики так, чтобы она выравнивала
 --    друг на друга две любые 'Indexable'-структуры данных. (0.25 б)
+
+align :: Indexable i => Scorable a => i a -> i a -> Float
+align seq1 seq2 = mat scoreMatrix A.! (lenSeq1, lenSeq2)
+  where
+    lenSeq1' = length $ indices seq1
+    lenSeq2' = length $ indices seq2
+    lenSeq1 = lenSeq1' + 1
+    lenSeq2 = lenSeq2' + 1
+    initScoreMatrix = createMatrix (lenSeq1 + 1) (lenSeq2 + 1) 0
+    matIndices = A.indices (mat initScoreMatrix)
+    scoreMatrix = recursiveUpdate initScoreMatrix matIndices
+    recursiveUpdate :: MatrixU Float -> [(Int, Int)] -> MatrixU Float
+    recursiveUpdate acc [] = acc
+    recursiveUpdate acc (x : xs) = recursiveUpdate updatedAcc xs
+      where
+        updatedAcc :: MatrixU Float
+        updatedAcc = scoreForIndex seq1 seq2 acc x (indices seq1) (indices seq2)
+
+scoreForIndex ::
+  Scorable a =>
+  Indexable i =>
+  i a ->
+  i a ->
+  MatrixU Float ->
+  (Int, Int) ->
+  [Index i] ->
+  [Index i] ->
+  MatrixU Float
+scoreForIndex seq1 seq2 scoreMat@(MatrixU m) ind@(i, j) indx1 indx2
+  | i == 0 && j == 0 = updateIndexM scoreMat ind 0
+  | i == 0 = updateIndexM scoreMat ind (fromIntegral j * gapCost)
+  | j == 0 = updateIndexM scoreMat ind (fromIntegral i * gapCost)
+  | otherwise = updateIndexM scoreMat ind (maximum [insCost, delCost, subCost])
+  where
+    insCost = m A.! (i - 1, j) + gapCost
+    delCost = m A.! (i, j - 1) + gapCost
+    subCost = m A.! (i - 1, j - 1) + score (getUnsafe seq1 (indx1 !! (i - 1))) (getUnsafe seq2 (indx2 !! (j - 1)))
+    gapCost :: Float
+    gapCost = -1
 
 ------------------------------------------------------------------------------------
 
@@ -142,12 +182,37 @@ data Seq a = Array Int a
 -- 5. Перепишите функцию @align@ так, чтобы она выдавала не только скор выравнивания,
 --    но и сам результат выравнивания. (2 б)
 
--- 6.1. Задайте класс типов 'SymbolReadable', в котором есть функция превращения 
+-- 6.1. Задайте класс типов 'SymbolReadable', в котором есть функция превращения
 --      буквы в какой-то объект.
 --      Определите инстансы 'SymbolReadable' для 'DNA' и 'RNA'. (0.1 б)
 
+class SymbolReadable a where
+  toObj :: Char -> a
+
+data DNA = A | T | G | C
+  deriving (Eq, Show)
+
+data RNA = A' | U' | G' | C'
+  deriving (Eq, Show)
+
+instance SymbolReadable DNA where
+  toObj 'A' = A
+  toObj 'T' = T
+  toObj 'G' = G
+  toObj 'C' = C
+
+instance SymbolReadable RNA where
+  toObj 'A' = A'
+  toObj 'U' = U'
+  toObj 'G' = G'
+  toObj 'C' = C'
+
 -- 6.2 Реализуйте функцию 'toSeq' прнимающую строку, а возвращающую 'Seq' элементов типа,
 --     являющегося представителем класса типов 'SymbolReadable'. (0.1 б)
+
+toSeq :: SymbolReadable a => String -> Seq a
+toSeq str =
+  Seq $ A.listArray (0, length str -1) $ toObj <$> str
 
 -- 7. Задайте класс типов 'WithCoords'. У его представителей должны быть определены функции:
 --    1. getCoords — получуает по объекту список его координат, т.е. [Seq (Float, Float)]
@@ -160,37 +225,36 @@ class WithCoords a where
   setCoords :: a -> [(Float, Float, Float)] -> a
 
 -- 8. Определите тип данных 'Atom'. У него должны быть поля, соотвестствующие его координатам
---    в пространстве, типу химического элемента и названию атома. 
+--    в пространстве, типу химического элемента и названию атома.
 --    Сделайте 'Atom' представителем класса типов 'WithCoords'. (0.25 б)
 
-data Atom = Atom {coords :: [(Float, Float, Float)], chemType :: String, name :: String}
+data Atom = Atom {coords :: (Float, Float, Float), chemType :: String, name :: String} deriving (Show)
 
 instance WithCoords Atom where
-  getCoords a = coords a
-  setCoords a coord = Atom coord (chemType a) (name a)
+  getCoords a = [coords a]
+  setCoords a [coord] = Atom coord (chemType a) (name a)
 
--- 9. Определите тип данных 'AminoAcid'. У него должны быть поля, соответствующие 
+-- 9. Определите тип данных 'AminoAcid'. У него должны быть поля, соответствующие
 --    набору атомов, входящих в состав аминокислоты, и однобуквенному названию аминокислоты.
 --    Сделайте 'AminoAcid' представителями классов типов 'WithCoords' и 'Scorable'. (0.5 б)
 
 class Scorable a where
-    score :: a -> a -> Float
+  score :: a -> a -> Float
 
-data AminoAcid = AminoAcid {atomSet :: [Atom], acidName :: String}
+data AminoAcid = AminoAcid {atomSet :: [Atom], acidName :: String} deriving (Show)
 
-instance WithCoords AminoAcid  where
-    getCoords a = getCoordsHelper (map coords (atomSet a))
-      where
-        getCoordsHelper :: [[a]] -> [a]
-        getCoordsHelper [a] = a
+instance WithCoords AminoAcid where
+  getCoords a = map coords (atomSet a)
 
-    setCoords a cords = AminoAcid (helper cords (atomSet a)) (acidName a)
-      where
-        helper :: [(Float,Float,Float)] -> [Atom] -> [Atom]
-        helper (cord:cs) (atom:as) = (setCoords atom [cord]):helper cs as
+  setCoords a coords = AminoAcid res (acidName a)
+    where
+      helper :: WithCoords a => [a] -> [(Float, Float, Float)] -> [a] -> [a]
+      helper (a : as) (c : cs) acc = helper as cs (setCoords a [c] : acc)
+      helper [] [] acc = acc
+      res = reverse $ helper (atomSet a) coords []
 
 instance Scorable AminoAcid where
-    score a a' = if acidName a == acidName a' then 5 else -4
+  score a a' = if acidName a == acidName a' then 5 else -4
 
 ------------------------------------------------------------------------------------
 
@@ -201,6 +265,11 @@ instance Scorable AminoAcid where
 
 -- 10. Сделайте так, чтобы (Indexable c => c AminoAcid) был представителем класса типов 'WithCoords'.
 --     Явно писать инстанс для 'Indexable c => c AminoAcid' нельзя! (1 б)
+
+instance (Indexable c, WithCoords (Index c)) => WithCoords (c AminoAcid) where
+  getCoords c = concatMap getCoords (indices c)
+  setCoords c coords =
+    foldl (\ac e -> updateUnsafe ac e (setCoords (getUnsafe ac e) coords)) c (indices c)
 
 -- 11. Реализуйте функцию 'rotate', которая принимает матрицу
 --     вращения и объект типа, являющегося инстансом 'WithCoords', а возвращает
@@ -213,6 +282,22 @@ newCoords ((a00, a01, a02), (a10, a11, a12), (a20, a21, a22)) (x, y, z) = (a00 *
 
 rotate :: WithCoords a => Matrix -> a -> a
 rotate matrix a = setCoords a (map (newCoords matrix) (getCoords a))
+
+newtype MatrixU a = MatrixU {mat :: Array (Int, Int) a}
+
+createMatrix :: Int -> Int -> a -> MatrixU a
+createMatrix rowsN colsN val =
+  MatrixU $
+    A.array (head allIndices, last allIndices) indicesToVals
+  where
+    allIndices = [(i, j) | i <- [0 .. rowsN - 1], j <- [0 .. colsN - 1]]
+    indicesToVals = zip allIndices (repeat val)
+
+updateIndexM :: MatrixU a -> (Int, Int) -> a -> MatrixU a
+updateIndexM (MatrixU m) ind val = MatrixU $ updateIndex m ind val
+
+updateIndex :: Ix ind => Array ind a -> ind -> a -> Array ind a
+updateIndex arr ind val = arr A.// [(ind, val)]
 
 ------------------------------------------------------------------------------------
 
