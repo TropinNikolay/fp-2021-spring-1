@@ -1,12 +1,14 @@
 -- В Хаскеле есть тип данных 'Map k v', сопостовляющий каждому ключу 
 -- типа @k@ какое-то конкретное значение типа @v@.
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 import Data.Foldable (find, toList)
 import Data.List (foldl')
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import GHC.Float (int2Float)
+import Data.Array
 
 -- 1. Реализуйте исключительно с помощью свёрток:
 
@@ -211,15 +213,45 @@ data BinaryHeap a
   deriving (Eq, Show)
 
 -- | 6.1. Реализуйте функцию siftDown, восстанавливающую свойство кучи в куче (0.5 б)
---      
 siftDown :: Ord a => BinaryHeap a -> BinaryHeap a
-siftDown = undefined
+siftDown BinLeaf = BinLeaf
+siftDown node =
+    let (BinNode v l r) = node
+        in
+    case (l, r) of
+      (BinNode left_Val left_L left_R, BinNode right_Val right_L right_R) -> if left_Val > right_Val && left_Val > v then BinNode left_Val new_L r else if right_Val > left_Val && right_Val > v then BinNode right_Val l new_R else node
+        where
+          new_R = siftDown $ BinNode v right_L right_R
+          new_L = siftDown $ BinNode v left_L left_R
+      (BinLeaf, BinLeaf) -> node
+      (BinNode left_Val left_L left_R, BinLeaf) -> if v < left_Val then BinNode left_Val new_L BinLeaf else node
+        where
+          new_L = siftDown $ BinNode v left_L left_R
+      (BinLeaf, BinNode right_Val right_L right_R) -> if v < right_Val then BinNode right_Val BinLeaf new_R else node
+        where
+          new_R = siftDown $ BinNode v right_L right_R
 
 -- | 6.2. Реализуйте с помощью свёртки (которая уже написана в коде) 
 --        функцию buildHeap, которая за __линейное время__ конструирует 
 --        на основе спиcка элементов бинарную кучу.
 --        Соответствующий алогритм описан в статье на вики (ссылка выше).
 --        Считайте, что изменение элемента 'Data.Array' происходит за константу (хотя это не так!) (1 б)
---       
-buildHeap :: Ord a => [a] -> BinaryHeap a
-buildHeap l = foldr undefined undefined l
+buildHeap  :: forall a. Ord a => [a] -> BinaryHeap a
+buildHeap l = foldr makeHeap array [1 .. div (length l) 2] ! 1
+  where
+    array :: Array Int (BinaryHeap a)
+    array = listArray (1, (length l)) (map (\x -> BinNode x BinLeaf BinLeaf) l)
+    makeHeap :: Int -> Array Int (BinaryHeap a) -> Array Int (BinaryHeap a)
+    makeHeap i array = array // remove
+      where
+        left_i = 2 * i
+        right_i = left_i + 1
+        cur_vl = val (array ! i)
+        left_heap :: BinaryHeap a
+        left_heap = array ! left_i
+        right_heap :: BinaryHeap a
+        right_heap = if right_i > (length l) then BinLeaf else array ! right_i
+        new_heap :: BinaryHeap a
+        new_heap = siftDown (BinNode cur_vl left_heap right_heap)
+        remove :: [(Int, BinaryHeap a)]
+        remove = if right_i > (length l) then [(i, new_heap), (left_i, BinLeaf)] else [(i, new_heap), (left_i, BinLeaf), (right_i, BinLeaf)]
