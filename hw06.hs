@@ -51,6 +51,8 @@ class Indexable c where
       getUnsafeHelper (Just a) = a
       getUnsafeHelper Nothing = error "Out of boundary"
 
+  getIthUnsafe :: c a -> Int -> a
+  getIthUnsafe cls i = getUnsafe cls $ (indices cls) !! i
   -- | Заменяет в структуре @c a@ значение по индексу @Index c@ на @a@.
   --   Возвращает изменённую структуру.
   --   Если индекс находится за границами структуры, то возвращает Nothing.
@@ -130,14 +132,20 @@ instance Indexable Seq where
 -- 4. Перепешите функцию @align@ с практики так, чтобы она выравнивала
 --    друг на друга две любые 'Indexable'-структуры данных. (0.25 б)
 
-align :: Indexable i => Scorable a => i a -> i a -> Float
-align seq1 seq2 = mat scoreMatrix A.! (lenSeq1, lenSeq2)
+align' :: Indexable i => Scorable a => i a -> i a -> Float
+align' seq1 seq2 = getAlignmentScore $ fillAlignmentMatrix seq1 seq2
+
+getAlignmentScore :: MatrixU Float -> Float
+getAlignmentScore (MatrixU scoreMatrix) = scoreMatrix A.! (snd $ A.bounds scoreMatrix)
+
+fillAlignmentMatrix :: Indexable i => Scorable a => i a -> i a -> MatrixU Float
+fillAlignmentMatrix seq1 seq2 = scoreMatrix
   where
     lenSeq1' = length $ indices seq1
     lenSeq2' = length $ indices seq2
     lenSeq1 = lenSeq1' + 1
     lenSeq2 = lenSeq2' + 1
-    initScoreMatrix = createMatrix (lenSeq1 + 1) (lenSeq2 + 1) 0
+    initScoreMatrix = createMatrix lenSeq1 lenSeq2 0
     matIndices = A.indices (mat initScoreMatrix)
     scoreMatrix = recursiveUpdate initScoreMatrix matIndices
     recursiveUpdate :: MatrixU Float -> [(Int, Int)] -> MatrixU Float
@@ -182,6 +190,23 @@ scoreForIndex seq1 seq2 scoreMat@(MatrixU m) ind@(i, j) indx1 indx2
 -- 5. Перепишите функцию @align@ так, чтобы она выдавала не только скор выравнивания,
 --    но и сам результат выравнивания. (2 б)
 
+align :: (Scorable a, Indexable c) => c a -> c a -> (Float, ([Maybe a], [Maybe a]))
+align seq1 seq2 = (alignmentScore, alignment)
+  where
+    alignmentMatrixU@(MatrixU m) = fillAlignmentMatrix seq1 seq2
+    alignmentScore = getAlignmentScore alignmentMatrixU
+
+    alignment = traceBack (snd $ A.bounds m) ([], [])
+
+    traceBack (0, 0) res = res
+    traceBack (i, 0) (s1, s2) = traceBack (i - 1, 0) ((Just (getIthUnsafe seq1 (i - 1)) : s1), (Nothing : s2))
+    traceBack (0, j) (s1, s2) = traceBack (0, j - 1) ((Nothing : s1), (Just (getIthUnsafe seq2 (j - 1)) : s2))
+    traceBack (i, j) (s1, s2) = traceBack (i - di, j - dj) ((stepI : s1), (stepJ : s2))
+      where
+        (di, dj) = snd $ maximum [(m A.! (i - di, j - dj), (di, dj)) | (di, dj) <- [(1, 0), (0, 1), (1, 1)]]
+        [stepI, stepJ] = [if d == 0 then Nothing else Just (seq `getIthUnsafe` (k - 1))
+                         | (d, seq, k) <- [(di, seq1, i), (dj, seq2, j)]]
+
 -- 6.1. Задайте класс типов 'SymbolReadable', в котором есть функция превращения
 --      буквы в какой-то объект.
 --      Определите инстансы 'SymbolReadable' для 'DNA' и 'RNA'. (0.1 б)
@@ -207,12 +232,25 @@ instance SymbolReadable RNA where
   toObj 'G' = G'
   toObj 'C' = C'
 
+instance Scorable DNA where
+    score A A = 5
+    score T T = 5
+    score G G = 5
+    score C C = 5
+    score _ _ = -4
+
 -- 6.2 Реализуйте функцию 'toSeq' прнимающую строку, а возвращающую 'Seq' элементов типа,
 --     являющегося представителем класса типов 'SymbolReadable'. (0.1 б)
 
 toSeq :: SymbolReadable a => String -> Seq a
 toSeq str =
   Seq $ A.listArray (0, length str -1) $ toObj <$> str
+
+dnaSeq_1 :: Seq DNA
+dnaSeq_1 = toSeq "ATCGTACGTACG"
+
+dnaSeq_2 :: Seq DNA
+dnaSeq_2 = toSeq "ATGCTAGCTGATGCAT"
 
 -- 7. Задайте класс типов 'WithCoords'. У его представителей должны быть определены функции:
 --    1. getCoords — получуает по объекту список его координат, т.е. [Seq (Float, Float)]
