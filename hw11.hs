@@ -44,7 +44,7 @@ censorState = undefined
 testWriterState :: String
 testWriterState = flip execState mempty $ do
     tellState "4"
-    censorState (pure . last) $ tellState "2" >> tellState "298"
+    censorState (pure . last) $ tellState "298" >> tellState "2"
 
 -- 5. Время для императивного программирования!
 
