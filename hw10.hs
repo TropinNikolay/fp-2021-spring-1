@@ -225,13 +225,13 @@ transaction hm (tx:txs) = do
         realValue <- get hm gamKey
         if realValue == gamValue
            then put hm (gamKey + 1) (gamValue - 1)
-           else return hm
+           else pure hm
       ModifyAndRemove{marKey, marValue} -> do
         update hm marKey (+1)
         newValue <- get hm marKey
         if newValue == marValue
            then remove hm (marKey - 1)
-           else return hm
+           else pure hm
       RemoveMany{rmKeys, rmVal} -> do
         hm'' <- go hm rmKeys
         put hm'' (length rmKeys) rmVal
