@@ -122,8 +122,8 @@ instance (Hashable k, Serializable v) => KVS (FileSystemKVS k v) where
     if doesExist
       then do
         serialized <- fromFile fName
-        return $ Just $ serialized
-      else return Nothing
+        pure $ Just $ serialized
+      else pure Nothing
 
   put (FileSystemKVS p) key value = do
     let fName = joinPath [p, show $ hash key]

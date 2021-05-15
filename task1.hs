@@ -22,10 +22,10 @@ main = go 0
           done <- isEOF
           nOfLines <- readIORef nOfLinesRef
           if nOfLines == 1000
-            then return True
+            then pure True
             else
               if done
-                then return False
+                then pure False
                 else do
                   modifyIORef nOfLinesRef (+ 1)
                   line <- getLine

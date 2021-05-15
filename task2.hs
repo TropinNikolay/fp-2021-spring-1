@@ -39,7 +39,7 @@ main = do
     wc h = do
       done <- liftIO $ hIsEOF h
       if done
-        then return ()
+        then pure ()
         else do
           line <- liftIO $ B.hGetLine h
           let (nWords, nBytes) = countWB (line `B.snoc` 32) True
