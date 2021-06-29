@@ -1,4 +1,5 @@
 import Control.Applicative (Alternative (..))
+import Control.Applicative
 import Data.Char (digitToInt, isAlphaNum, isDigit, isPrint, isSpace)
 import Data.Map.Strict (Map, fromList)
 import Data.Maybe (catMaybes)
@@ -32,7 +33,6 @@ instance Alternative Parser where
       f s = case runParser pA s of
         Nothing -> runParser pA' s
         x       -> x
-  many pa = (:) <$> pa <*> (many pa <|> pure [])
 
 instance Monad Parser where
   m >>= f = Parser $ \str -> case runParser m str of
@@ -66,11 +66,19 @@ spaceP = many oneSpaceP
 charP :: Parser String
 charP = some symbolP
 
-newLineP :: Parser Char
-newLineP = satisfyP (== '\n')
+-- newLineP :: Parser Char
+-- newLineP = satisfyP (== '\n')
+newLineP :: Parser String
+newLineP = stringP "\n" <|> stringP "\r\n" <|> stringP "\r"
+
+oneCharAnyP :: Parser Char
+oneCharAnyP = satisfyP (\x -> isPrint x && not (isSpace x))
 
 charAnyP :: Parser String
-charAnyP = some (satisfyP (\x -> isPrint x && not (isSpace x)))
+charAnyP = some oneCharAnyP
+
+allCharP :: Parser Char
+allCharP = oneCharAnyP <|> oneSpaceP
 
 valueP' :: Parser Value
 valueP' = (FloatValue <$> floatP) <|> ( do
@@ -101,7 +109,7 @@ stringP (c:cs) = (:) <$> charP' c <*> stringP cs
 -- | 1.2. Парсит целое число (0.25 б)
 --
 number :: Parser String
-number = many (satisfyP isDigit)
+number = some (satisfyP isDigit)
 
 plus :: Parser String
 plus = charP' '+' *> number
@@ -230,40 +238,69 @@ csvP = do columns <- sepBy spaceP charP
 --    Вот спецификация формата данных: https://www.wwpdb.org/documentation/file-format-content/format33/v3.3.html
 --    Она довольно большая, но мы не будем парсить всё, что в ней есть.
 --
---    За задание можно получить разное количество баллов в зависимости от того, 
+--    За задание можно получить разное количество баллов в зависимости от того,
 --    насколько клёвый у вас парсер.
 --
 --    В репозитории лежат два PDB-файла: only_atoms.pdb, atoms_and_bonds.pdb.
 --    Если ваш парсер корректно парсит:
---      1. only_atoms.pdb, то вы получите 2 б. 
---         Для выполнения задания фактически нужно научиться парсить только секцию MODEL, 
+--      1. only_atoms.pdb, то вы получите 2 б.
+--         Для выполнения задания фактически нужно научиться парсить только секцию MODEL,
 --         в которой может содержаться только секция ATOM.
 --      2. atoms_and_bonds.pdb, то вы получите 1 бонусный балл. (задание необязательное)
 --         Придётся научиться парсить секцию CONNECT.
 --
-eachP :: Parser [Value]
-eachP = catMaybes <$> abstractRowP ' ' valueP'
-
-pdbP :: Parser PDBModel
-pdbP = do model <- stringP "MODEL"
-          some spaceP
-          x <- intP
-          allLines <- sepBy (stringP "\r\n" <|> stringP "\n" <|> stringP "\r") eachP
-          let (at, bo) = foldl (\(at, b) x -> if isAtom x then (at ++ [x], b) else if isBond x then (at, b ++ [x]) else (at, b)) ([], []) allLines
-          return $ PDBModel (PDBAtom <$> at) (PDBBond <$> bo)
-          where
-            isAtom ((StringValue "ATOM") : xs) = True
-            isAtom _ = False
-            isBond ((StringValue "CONECT") : xs) = True
-            isBond _ = False
 
 -- | Тип, представляющий из себя ATOM
 --
-data PDBAtom = PDBAtom [Value] deriving (Show)
+data PDBAtom = PDBAtom
+  { serial     :: Int
+  , name       :: String
+  , altLoc     :: Char
+  , resName    :: String
+  , chainID    :: Char
+  , resSeq     :: Int
+  , iCode      :: Char
+  , x          :: Float
+  , y          :: Float
+  , z          :: Float
+  , occupancy  :: Float
+  , tempFactor :: Float
+  , element    :: String
+  , charge     :: String
+  }
+  deriving Show
+
+fixLenP :: Int -> Parser String
+fixLenP 0 = pure ""
+fixLenP l = (:) <$> allCharP <*> (fixLenP $ l - 1)
+
+fixLenStrippedP :: Int -> Parser String
+fixLenStrippedP l = trim <$> (fixLenP l)
+  where
+    trim = f . f
+    f = reverse . dropWhile isSpace
+
+pdbAtomP :: Parser PDBAtom
+pdbAtomP = (toAtom <$>) $ (stringP "ATOM" *> spaceP *>) $
+  (,,,,,,,,,,,,,) <$>
+  intP <* oneSpaceP <*> fixLenStrippedP 4 <*> allCharP <*> charP <* oneSpaceP <*>
+  symbolP <* spaceP <*> intP <*> allCharP <*> f <*> f <*> f <*> f <*> f <*
+  fixLenP 10 <*> fixLenStrippedP 2 <*> fixLenStrippedP 2
+    where
+      f = spaceP *> floatP 
+      toAtom
+        (serial, name, altLoc, resName, chainID, resSeq,
+         iCode, x, y, z, occupancy, tempFactor, element, charge) =
+        PDBAtom serial name altLoc resName chainID resSeq
+         iCode x y z occupancy tempFactor element charge
 
 -- | Тип, представляющий из себя CONNECT
 --
-data PDBBond = PDBBond [Value] deriving (Show)
+data PDBBond = Conect Int Int
+  deriving Show
+
+pdbBondP = (uncurry Conect <$>) $ (stringP "CONECT" *> spaceP *>) $
+  (,) <$> intP <* spaceP <*> intP
 
 -- | Тип, представляющий из себя MODEL
 --
@@ -271,8 +308,21 @@ data PDBModel
   = PDBModel 
       { atoms :: [PDBAtom] -- атомы из секции ATOM
       , bonds :: [PDBBond] -- связи из секции CONNECT
-      } deriving (Show)
+      }
+    deriving Show
+
+eitherP :: Parser a -> Parser b -> Parser (Either a b)
+eitherP aP bP = (Left <$> aP) <|> (Right <$> bP)
+
+pdbModelP = ((toPDBModel $ PDBModel [] []) <$>) $ (stringP "MODEL" *> spaceP *> intP *> newLineP *>) $ many (eitherP (pdbAtomP <* newLineP) (pdbBondP <* newLineP)) <* stringP "ENDMDL" <* newLineP
+  where
+    toPDBModel pdbM [] = pdbM
+    toPDBModel (PDBModel atoms bonds) (Left x:xs) = toPDBModel (PDBModel (x:atoms) bonds) xs
+    toPDBModel (PDBModel atoms bonds) (Right x:xs) = toPDBModel (PDBModel atoms (x:bonds)) xs
 
 -- | PDB-файл
 --
 newtype PDB = PDB [PDBModel]
+  deriving Show
+
+pdbP = many pdbModelP <* stringP "END"
