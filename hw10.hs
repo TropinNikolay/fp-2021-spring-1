@@ -4,12 +4,10 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE DatatypeContexts #-}
-
-
-import Data.List (elemIndex)
+import Data.List (elemIndex, concat, replicate)
 import Control.Applicative (Applicative(..))
 import Control.Monad       (liftM, ap)
+import Data.Maybe       (fromJust)
 
 -- 1. Перепешите код без do-нотации, используя bind (>>=), then (>>) и обычные let'ы.
 
@@ -72,7 +70,10 @@ instance Applicative (WithData d) where
     (WithData f) <*> (WithData x) = WithData $ \d -> f d (x d)
 
 instance Monad (WithData d) where
-    WithData{runWithData = x} >>= f = WithData{runWithData = \d -> let WithData f' = f (x d)  in f' d}
+    WithData{runWithData = x} >>= f =
+      WithData{runWithData = \d -> let WithData f' = f (x d)  in f' d}
+
+-- Эффектом этой монады является неизменяемое состояние типа d, что позволяет удобно производить вычисления в неком фиксированном контексте
 
 -- 4. С помощью монады списка создайте список, содержащий в себе все пифагоровы тройки.
 --    В списке не должно быть дублей.
@@ -85,7 +86,7 @@ pythagoreanTriplets = do
     a <- [1..c]
     b <- [1..a]
     if a^2 + b^2 == c^2
-       then return (a, b, c)
+       then pure (a, b, c)
        else fail ""
 
 -- 5. Сделайте (Parser token) монадой. (0.5 б)
@@ -125,7 +126,7 @@ instance Monad (Parser token) where
 class Hashable a where
     hash :: a -> Int
 
-data (Hashable k, Eq k) => HashMap k v = HashTable{table :: [[(k, v)]], size :: Int}
+data HashMap k v = HashTable{table :: [[(k, v)]], size :: Int, nElements :: Int, loadFactor :: Float}
 
 class KeyValueStorage kvs where
     -- Ассоциированные типы. Они нам уже встречались в домашке про классы типов
@@ -158,7 +159,17 @@ keyIndex :: (Hashable k, Eq k) => HashMap k v -> k -> Int
 keyIndex HashTable{size} key = hash key `mod` size
 
 getBucket :: (Hashable k, Eq k) => HashMap k v -> k -> [(k, v)]
-getBucket hm@HashTable{table} key = table !! keyIndex hm key
+getBucket hm@HashTable{table, size} key =
+  if size > 0
+    then table !! keyIndex hm key
+    else []
+
+resize :: (Hashable k, Eq k, Eq v) => HashMap k v -> HashMap k v
+resize HashTable{table, size, nElements, loadFactor} =
+  go HashTable{table = replicate (2 * size) [], size = 2 * size, nElements = 0, loadFactor} $ concat table
+    where
+      go hm [] = hm
+      go hm ((k, v):xs) = fromJust $ put (go hm xs) k v
 
 instance (Hashable k, Eq k, Eq v) => KeyValueStorage (HashMap k v) where
     type Key (HashMap k v) = k
@@ -166,16 +177,23 @@ instance (Hashable k, Eq k, Eq v) => KeyValueStorage (HashMap k v) where
 
     get hm@HashTable{table, size} key = lookup key $ getBucket hm key
 
-    put hm@HashTable{table, size} key value =
+    put hm@HashTable{table, size, nElements, loadFactor} key value =
         case get hm key of
           Just _  -> Nothing
-          Nothing -> Just HashTable{table = table', size}
+          Nothing -> Just $
+            if size > 0
+              then if nElements' / size' > loadFactor then resize hm' else hm'
+              else HashTable{table = [[(key, value)]], size = 1, nElements = 1, loadFactor}
             where
               bucket' = (key, value) : getBucket hm key
-              (table1, _:table2) = splitAt (keyIndex hm key) table
-              table' = table1 ++ (bucket' : table2)
+              (table1, table2) = splitAt (keyIndex hm key) table
+              (_, table2') = splitAt 1 table2
+              table' = table1 ++ (bucket' : table2')
+              hm' = HashTable{table = table', size, nElements = nElements + 1, loadFactor}
+              nElements' = fromIntegral (nElements + 1) :: Float
+              size' = fromIntegral size :: Float
 
-    remove hm@HashTable{table, size} key = do
+    remove hm@HashTable{table, size, nElements, loadFactor} key = do
         value <- get hm key
         let bucket = getBucket hm key
         elemInd <- elemIndex (key, value) bucket
@@ -183,13 +201,13 @@ instance (Hashable k, Eq k, Eq v) => KeyValueStorage (HashMap k v) where
             row' = row1 ++ row2
             (table1, _:table2) = splitAt (keyIndex hm key) table
             table' = table1 ++ (row' : table2)
-        return HashTable{table = table', size}
+        pure HashTable{table = table', size, nElements, loadFactor}
 
     update hm key f = do
         value <- get hm key
         hm' <- remove hm key
-        hm'' <- put hm key (f value)
-        return hm''
+        hm'' <- put hm' key (f value)
+        pure hm''
 
 -- 7. Реализуйте с помощью do-нотации и рекурсии функцию @transaction@,
 --    последовательно исполняющую над заданной мапой из 'Int' в 'Int'
