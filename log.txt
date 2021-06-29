@@ -1,0 +1,2 @@
+Info: Successfully read the input file
+Info: Stopped reading the command

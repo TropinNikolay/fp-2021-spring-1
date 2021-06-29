@@ -1,26 +1,29 @@
+{-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NamedFieldPuns        #-}
+{-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE UndecidableInstances  #-}
-{-# LANGUAGE UndecidableInstances  #-}
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 
-import Control.Monad.State    (State, modify, put, get, StateT, MonadState (..))
-import Control.Monad.Identity (Identity)
-import Control.Monad.Trans    (MonadTrans (..))
-import Control.Monad.Except (ExceptT)
-import GHC.Generics (Generic)
-import Control.Exception (evaluate)
-import Control.DeepSeq (NFData, force)
-import Control.Monad.Except (runExceptT, throwError, catchError)
-import Control.Monad.IO.Class (liftIO, MonadIO)
-import qualified Data.Map as M
-import System.IO (Handle, IOMode (..), hGetContents, hIsEOF, hPutStrLn, putStrLn, withFile, hGetLine)
-import Control.Monad (join, forM_)
-import Data.Maybe (Maybe(..))
-import Data.List (isPrefixOf)
-import Prelude hiding         (log)
+
+import qualified Control.Exception             as E
+import           Control.Monad.Except          (ExceptT, runExceptT, throwError)
+import           Control.Monad.IO.Class        (MonadIO, liftIO)
+import           Control.Monad.Identity        (Identity)
+import           Control.Monad.State           (MonadState (..), State,
+                                                StateT (..), get, modify, put)
+import           Control.Monad.Trans           (MonadTrans (..))
+import qualified Data.Bifunctor                as BF
+import           Data.Function                 (fix)
+import           Data.Functor                  (($>))
+import qualified Data.Map                      as M
+import qualified Data.Text                     as T
+import           Prelude                       hiding (log)
+import           System.IO
+import           System.Process                (readProcess)
+import           Text.ParserCombinators.Parsec as P hiding (State)
+import           Text.Printf                   (printf)
+import           Text.Read                     (readEither)
 
 -- | Сегодня мы будем писать свой модный логгер!
 --
@@ -230,73 +233,106 @@ type UserId = Int
 ---- | Тип возможных прав пользователей.
 ----
 data AccessRights = Read | Write | ReadAndWrite | Admin
-  deriving (Read, Show, NFData, Generic)
+  deriving (Read, Show)
 
 type YourState = M.Map UserId AccessRights
+
 type YourError = String
 
-readLog :: Monad m => LoggerT m a -> LoggerT m Log
-readLog (LoggerT ma) = LoggerT $ do
-  Logged { logs, val } <- ma
-  pure $ Logged { logs, val = logs}
+type App a = LoggingStateWithErrorInIO YourState YourError a
 
-forceEvalIO :: NFData a => IO a -> IO a
-forceEvalIO = join . fmap (evaluate . force)
+data Cmd
+  = Stop
+  | GiveAccess UserId AccessRights
+  deriving (Show)
 
-processUserDB :: FilePath -> FilePath -> FilePath -> LoggingStateWithErrorInIO YourState YourError ()
-processUserDB pathToInputDB pathToLog pathToOutDB =
-  let
-    loggerT = logic
-    writeLog = do
-      log' <- readLog loggerT
-      writeLogToFile log'
-   in writeLog
-    where
-      logic :: LoggingStateWithErrorInIO YourState YourError ()
-      logic = do
-        usersList <- liftIO $ withFile pathToInputDB ReadMode $ \h -> forceEvalIO $ goReadInputDB h
-        log Info "Input DB was read"
-        put $ M.fromList usersList
-        liftIO $ putStrLn "Enter commands below:"
-        goHandleInput
-        writeUsersToFile
 
-      goReadInputDB :: Handle -> IO [(UserId, AccessRights)]
-      goReadInputDB h = do
-        isEOF <- hIsEOF h
-        if isEOF then
-          pure []
-        else do
-          line <- hGetLine h
-          let userId:accessRights:_ = words line
-          nextUsers <- goReadInputDB h
-          pure $ (read userId, read accessRights):nextUsers
+processUserDB :: FilePath -> FilePath -> FilePath -> App ()
+processUserDB pathToInputDB pathToLog pathToOutDB = saveLog pathToLog core
+  where
+    core = do
+      inputStr <- safeReadFile pathToInputDB
+      inputDB <- handleEither $ traverse (readEither @(UserId, AccessRights)) $ lines inputStr
+      log Info "Successfully read the input file"
+      put $ M.fromList inputDB
+      liftIO $ hSetBuffering stdin NoBuffering
+      fix $ \loop -> do
+        liftIO $ putStrLn "Type a command (\"GIVE ACCESS <user_id> <access_right>\" or \"STOP\"):"
+        cmd <- getCmd
+        case cmd of
+          Stop -> log Info "Stopped reading commands"
+          GiveAccess uid access -> do
+            modify $ M.insert uid access
+            log Info $ printf "Granted user %d access rights %s" uid (show access)
+            loop
+      st <- get
+      liftIO $ writeFile pathToOutDB $ showState st
 
-      writeUsersToFile = do
-        users <- get
-        liftIO $ withFile pathToOutDB WriteMode $ \h -> forceEvalIO $ do
-          forM_ (M.toList users) $ \(uid, ur) -> do
-            hPutStrLn h $ (show uid) ++ " " ++ (show ur)
 
-      writeLogToFile log' =
-        liftIO $ withFile pathToLog WriteMode $ \h -> forceEvalIO $ do
-          forM_ log' $ \(lvl, s) -> do
-            hPutStrLn h $ (show lvl) ++ " " ++ s
+showState :: M.Map UserId AccessRights -> String
+showState m = unlines $ show <$> M.toList m
 
-      throwErrorLogged s = do
-        log Error s
-        lift $ lift $ throwError s
 
-      goHandleInput :: LoggingStateWithErrorInIO YourState YourError ()
-      goHandleInput = do
-        line <- liftIO getLine
-        if "STOP" `isPrefixOf` line then do
-          log Info "Recieved STOP command"
-          pure ()
-        else if "GIVE ACCESS" `isPrefixOf` line then do
-          let _:_:uid':ur':_ = words line
-          log Info $ "Giving " ++ ur' ++ " access rights to " ++ uid'
-          modify $ M.insert (read uid') (read ur')
-          goHandleInput
-        else
-          throwErrorLogged "Bad command"
+showLog :: Log -> String
+showLog l = unlines $ (\(level, msg) -> printf "%s: %s" (show level) msg) <$> l
+
+
+saveLog :: FilePath -> App () -> App ()
+saveLog pathToLog app = do
+  log <- logs <$> lift (runLoggerT app)
+  liftIO $ writeFile pathToLog $ showLog log
+
+
+parseCmd :: Parser Cmd
+parseCmd = parseStop <|> parseGiveAccess where
+    parseStop = string "STOP" $> Stop
+    parseGiveAccess =  do
+      string "GIVE ACCESS"
+      spaces
+      userID <- many1 digit
+      spaces
+      accessStr <- many1 alphaNum
+      pure $ GiveAccess (read userID) (read accessStr)
+
+
+getCmd :: App Cmd
+getCmd = do
+  liftIO $ putStr "> "
+  line <- liftIO getLine
+  handleEither $ parse parseCmd "" line
+
+
+safeReadFile' :: FilePath -> IO (Either E.IOException String)
+safeReadFile' = E.try . readFile
+
+
+safeReadFile :: FilePath -> App String
+safeReadFile filePath =
+  handleEither =<< liftIO (comply <$> safeReadFile' filePath)
+
+
+comply :: Show e => Either e a -> Either YourError a
+comply = BF.first show
+
+
+handleEither :: Show e => Either e a -> App a
+handleEither = either handleError return
+  where handleError e = lift (throwError . show $ e)
+
+
+execApp :: App a -> IO ()
+execApp p = either print (const $ return ()) =<< runExceptT (runStateT (runLoggerT p) M.empty)
+
+
+run :: FilePath -> FilePath -> FilePath -> IO ()
+run pathToInputDB pathToLog pathToOutDB = execApp $ processUserDB pathToInputDB pathToLog pathToOutDB
+
+
+trim :: String -> String
+trim = T.unpack . T.strip . T.pack
+
+
+testRun :: IO ()
+testRun = do
+  pref <- trim <$> readProcess "sh" ["-c", "pwd"] ""
+  run (pref ++ "/input.txt") (pref ++ "/log.txt") (pref ++ "/output.txt")
